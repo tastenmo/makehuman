@@ -2,12 +2,19 @@
 
 from .namespace import NameSpace
 
+import os
+
 import getpath
 import bvh
 import json
 import animation
+import log
+import numpy as np
 
 from collections import OrderedDict
+
+# Bone used for determining the pose scaling (root bone translation scale)
+COMPARE_BONE = "upperleg02.L"
 
 class Skeleton(NameSpace):
     """This namespace wraps call which work with skeleton, rig, poses and expressions."""
@@ -55,7 +62,31 @@ class Skeleton(NameSpace):
 
     def setPoseFromFile(self, bvh_file_name):
         """Set the pose from a BVH file"""
-        skeleton = self.getSkeleton()
+
+        if bvh_file_name is None:
+            # clear pose
+            self.human.resetToRestPose()
+            self.bvh_bone_length = None
+            self.bvh_root_translation = None
+            return
+        
+        if os.path.splitext(bvh_file_name)[1].lower() == '.bvh':
+            anim = self._loadBvh(bvh_file_name, convertFromZUp="auto")
+            if not anim:
+                log.error('Cannot load animation from %s' % bvh_file_name)
+                self.human.resetToRestPose()
+                self.bvh_bone_length = None
+                self.bvh_root_translation = None
+                return
+        else:
+            log.error("Cannot load pose file %s: File type unknown." % bvh_file_name)
+            return
+        
+        self.human.addAnimation(anim)
+        self.human.setActiveAnimation(anim.name)
+        self.human.setToFrame(0, update=False)
+ 
+        self.human.setPosed(True)    
         pass
 
     def setExpressionFromFile(self, mhposeFile):
@@ -111,12 +142,54 @@ class Skeleton(NameSpace):
             self.human.setPosed(True)
             self.human.refreshPose()
 
-    def _loadBvh(self, bvh_file_name):
-        pass
-
+    def _loadBvh(self, filepath, convertFromZUp="auto"):
+        bvh_file = bvh.load(filepath, convertFromZUp)
+        if COMPARE_BONE not in bvh_file.joints:
+            msg = 'The pose file cannot be loaded. It uses a different rig then MakeHuman\'s default rig'
+            #G.app.prompt('Error', msg, 'OK')
+            log.error('Pose file %s does not use the default rig.' % filepath)
+            return None
+        anim = bvh_file.createAnimationTrack(self.human.getBaseSkeleton())
+        if "root" in bvh_file.joints:
+            posedata = anim.getAtFramePos(0, noBake=True)
+            root_bone_idx = 0
+            self.bvh_root_translation = posedata[root_bone_idx, :3, 3].copy()
+        else:
+            self.bvh_root_translation = np.asarray(3*[0.0], dtype=np.float32)
+        self.bvh_bone_length = self._calculateBvhBoneLength(bvh_file)
+        self._autoScaleAnim(anim)
+        #_, _, _, license = self.getMetadata(filepath)
+        #anim.license = license
+        return anim
+    
     def _createAnimationTrack(self, skeleton):
         pass
 
-    def _calculateBVHBoneLength(self):
-        pass
+    def _calculateBvhBoneLength(self, bvh_file):
+        import numpy.linalg as la
+        if COMPARE_BONE not in bvh_file.joints:
+            raise RuntimeError('Failed to auto scale BVH file %s, it does not contain a joint for "%s"' % (bvh_file.name, COMPARE_BONE))
 
+        bvh_joint = bvh_file.joints[COMPARE_BONE]
+        joint_length = la.norm(bvh_joint.children[0].position - bvh_joint.position)
+        return joint_length
+    
+    def _autoScaleAnim(self, anim):
+        """
+        Auto scale BVH translations by comparing upper leg length to make the
+        human stand on the ground plane, independent of body length.
+        """
+        import numpy.linalg as la
+        bone = self.human.getBaseSkeleton().getBone(COMPARE_BONE)
+        scale_factor = float(bone.length) / self.bvh_bone_length
+        trans = scale_factor * self.bvh_root_translation
+        log.message("Scaling animation %s with factor %s" % (anim.name, scale_factor))
+        # It's possible to use anim.scale() as well, but by repeated scaling we accumulate error
+        # It's easier to simply set the translation, as poses only have a translation on
+        # root joint
+
+        # Set pose root bone translation
+        root_bone_idx = 0
+        posedata = anim.getAtFramePos(0, noBake=True)
+        posedata[root_bone_idx, :3, 3] = trans
+        anim.resetBaked()

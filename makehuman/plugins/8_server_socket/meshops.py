@@ -49,6 +49,8 @@ class SocketMeshOps(AbstractOp):
         # Import skeleton operations
         self.functions["getSkeleton"] = self.getSkeleton
 
+        self.functions["render"] = self.render
+
     def getCoord(self,conn,jsonCall):
         jsonCall.data = self.human.mesh.coord
 
@@ -517,3 +519,11 @@ class SocketMeshOps(AbstractOp):
         jsonCall.responseIsBinary = True
         faces = self._getProxyMesh(proxy).fuvs
         jsonCall.data = faces.tobytes()
+
+    def render(self,conn,jsonCall):
+
+        Filename = jsonCall.params.get("Filename") # use get, since might not be there
+
+        self.api.exports.render(Filename, 800, 600, True)
+
+        jsonCall.setData("Save to " + Filename + " successful.")

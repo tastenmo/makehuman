@@ -82,4 +82,11 @@ class Exports(NameSpace):
         fileentry = self._getDummyFileEntry(outputFilename, useExportsDir)
         e.export(human, fileentry)
 
+    def render(self, outputFilename, width=800, height=600, useExportsDir=True):
+        """Render the current toon to a file."""
+        img = mh.renderToBuffer(width, height)
+        #fileentry = self._getDummyFileEntry(outputFilename, useExportsDir)
+        img.save(outputFilename)
+
+
 
